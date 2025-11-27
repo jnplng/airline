@@ -1,0 +1,782 @@
+---
+title: "United Airlines Departure Delays"
+authors: Dan Nguyen, Jennifer Poling, Paul Skentzos
+output: html_document
+date: "2025-10-25"
+---
+# United Airlines Departure Delays Project
+
+This project will examine the relationship between United Airlines departure delays and time of day, time of year, temperature, wind speed, precipitation, and visibility.
+
+## Introduction
+We set out to understand when and under what conditions United flights tend to depart late from New York–area airports, using the public nycflights13 dataset for 2013, imported in our RStudio environment. We look at time of day, time of year, and common weather factors: temperature, wind speed, precipitation, and visibility. We summarize what the data shows. To check whether visible patterns are likely more than chance, we use permutation tests, a resampling method that shuffles labels and compares the observed result to what we’d expect if there were no real relationship. 
+
+###### Install libraries
+```{r}
+library(tidyverse)
+library(nycflights13)
+```
+## Prepare the Data
+
+###### Inspect the data
+```{r}
+glimpse(flights)
+```
+```{r}
+glimpse(weather)
+```
+
+###### Keep only the relevant United Airlines flights 
+
+```{r}
+flights_UA <- flights %>%
+  filter(carrier == 'UA') %>%
+  filter(!is.na(dep_delay)) 
+```
+
+
+###### Create the "late" and "very_late" columns
+```{r}
+flights_UA <- flights_UA %>%
+  mutate(
+    late = dep_delay > 0,
+    very_late = dep_delay > 30
+    )
+glimpse(flights_UA)
+```
+
+###### Join the flight data and the weather data.
+
+Use a left join so that the weather data is applied to each flight
+
+```{r}
+flights_weather <- flights_UA %>%
+  left_join(weather, by = c('origin', 'time_hour', 'year', 'month', 'day', 'hour'))
+glimpse(flights_weather)
+```
+
+###### Create a "season" column.
+First check how many are null values in the "month" column.
+```{r}
+sum(is.na(flights_weather$month))
+```
+Now create the "season" column. Use this definition: summer consists of June, July, and August; fall consists of September, October, and November; winter consists of December, January, and February; spring consists of March, April, and May.
+```{r}
+flights_weather <- flights_weather %>%
+  mutate(season = case_when(
+    month %in% c(12, 1, 2) ~ 'winter',
+    month %in% c(3, 4, 5) ~ 'spring',
+    month %in% c(6, 7, 8) ~ 'summer',
+    month %in% c(9, 10, 11) ~ 'fall'
+  ))
+glimpse(flights_weather)
+```
+
+###### Create a time_of_day column.
+What times do flights operate?
+```{r}
+unique(flights_weather$hour)
+```
+How many null values are there in the hour column?
+```{r}
+sum(is.na(flights_weather$hour))
+```
+Create a time_of_day column using the following definition. early: 5, 6, 7; morning: 8, 9, 10; mid_day: 11, 12, 13; afternoon: 14, 15, 16; evening: 17, 18, 19; late: 20, 21, 22, 23
+```{r}
+flights_weather <- flights_weather %>%
+  mutate(time_of_day = case_when(
+    hour %in% c(5, 6, 7) ~ 'early',
+    hour %in% c(8, 9, 10) ~ 'morning',
+    hour %in% c(11, 12, 13) ~ 'mid_day',
+    hour %in% c(14, 15, 16) ~ 'afternoon',
+    hour %in% c(17, 18, 19) ~ 'evening',
+    hour %in% c(20, 21, 22, 23) ~ 'night' 
+  ))
+glimpse(flights_weather)    
+```
+######## Convert the time_of_day column to a factor with a specific order for consistent plotting and analysis
+```{r}
+flights_weather <- flights_weather %>%
+  mutate(time_of_day = fct_relevel(time_of_day,
+                                 'early',
+                                 'morning',
+                                 'mid_day',
+                                 'afternoon',
+                                 'evening',
+                                 'night'))
+count(flights_weather, time_of_day)
+```
+
+###### Create Visibility Categories
+What is in the visibility column?
+```{r}
+unique(flights_weather$visib)
+```
+How many NA values are there in the visibility column?
+```{r}
+sum(is.na(flights_weather$visib))
+```
+Keep the rows that have visibility values
+```{r}
+flights_weather <- flights_weather %>%
+  filter(!is.na(visib))
+```
+
+
+Create visibility categories based on common visibility cutoffs in aviation. IMC (Instrument Meteorological Conditions): below 3, call this 'poor'. MVFR (Marginal Visual Flight Rules): 3 to 5, call this 'fair'. VFR (Visual Flight Rules): above 5, call this 'good'.
+```{r}
+flights_weather <- flights_weather %>%
+  mutate(visib_cat = case_when(
+    visib < 3 ~ 'poor',
+    visib >=3 & visib <= 5 ~ 'fair',
+    visib > 5 ~ 'good'
+  ))
+glimpse(flights_weather)
+```
+
+######## Convert the visibility category column to a factor with a specific order for consistent plotting and analysis
+```{r}
+flights_weather <- flights_weather %>%
+  mutate(visib_cat = fct_relevel(visib_cat,
+                                 'poor',
+                                 'fair',
+                                 'good'))
+count(flights_weather, visib_cat)
+```
+###### Create a column for whether or not there is precipitation.
+```{r}
+flights_weather <- flights_weather %>%
+  mutate(precip_binary = precip > 0.00)
+count(flights_weather, precip_binary)
+```
+###### Create quantile bins for temperature.
+```{r}
+sum(is.na(flights_weather$temp))
+```
+Remove rows with NA in the temperature column.
+```{r}
+flights_weather <- flights_weather %>%
+  filter(!is.na(temp))
+```
+Calculate the quantiles
+```{r}
+temp_quantiles <- quantile(flights_weather$temp, probs = seq(0, 1, 0.25))
+```
+Create a new column
+```{r}
+flights_weather$temp_q <- cut(flights_weather$temp,
+                              breaks = temp_quantiles,
+                              include.lowest = TRUE,
+                              right = FALSE)
+
+# Check the distribution of the new bins
+table(flights_weather$temp_q)
+```
+###### Create quantile bins for wind speed.
+```{r}
+sum(is.na(flights_weather$wind_speed))
+```
+Remove rows with NA in the wind speed column.
+```{r}
+flights_weather <- flights_weather %>%
+  filter(!is.na(wind_speed))
+```
+Calculate the quantiles
+```{r}
+wind_speed_quantiles <- quantile(flights_weather$wind_speed, probs = seq(0, 1, 0.25))
+```
+Create a new column
+```{r}
+flights_weather$wind_speed_q <- cut(flights_weather$wind_speed,
+                              breaks = wind_speed_quantiles,
+                              include.lowest = TRUE,
+                              right = FALSE)
+
+# Check the distribution of the new bins
+table(flights_weather$wind_speed_q)
+```
+###### Create a column for whether or not there are wind gusts.
+I think that NA means there weren't wind gusts. Check how many NA values in the wind gust column.
+```{r}
+sum(is.na(flights_weather$wind_gust))
+```
+Create a wind gust binary column.
+```{r}
+flights_weather <- flights_weather %>%
+  mutate(wind_gust_binary = !is.na(wind_gust))
+count(flights_weather, wind_gust_binary)
+```
+Create a summary table.
+```{r}
+summary(flights_weather)
+```
+Output the clean .csv
+```{r}
+write_csv(flights_weather, 'flights_clean.csv')
+```
+
+###### Exploratory Data Analysis  
+####### Departure delay vs time of day and time of year  
+```{r}
+ggplot(flights_weather, aes(x = time_of_day, y = dep_delay)) +
+  geom_boxplot(outlier.size = 0.8, alpha = 0.9) +
+  coord_cartesian(ylim = c(quantile(flights_weather$dep_delay, 0.01, na.rm=TRUE),
+                           quantile(flights_weather$dep_delay, 0.99, na.rm=TRUE))) +
+  facet_wrap(~season) +
+  labs(title = "Departure delay by time of day (faceted by season)",
+       x = "Time of day", y = "Departure delay (minutes)") +
+  theme_minimal(base_size = 13) + theme(axis.text.x = element_text(angle = 70, vjust = 0.5))
+```
+######## Q1: Do flights departing in the evening and at night tends to get delayed longer than flights departing at earlier time?  
+H~0: $\mu$~n - $\mu$~e = 0  
+H~A: $\mu$~n - $\mu$~e $\ge$ 0  
+```{r}
+evening_night = flights_weather$dep_delay[flights_weather$time_of_day == "evening" | flights_weather$time_of_day == "night"]
+earlier = flights_weather$dep_delay[flights_weather$time_of_day != "evening" & flights_weather$time_of_day != "night"]
+
+Time <- c(evening_night, earlier)
+
+# Observed difference in means
+observed <- mean(evening_night) - mean(earlier)
+observed
+
+# Get the sample sizes
+n1 <- length(evening_night)
+n_total <- length(Time)
+
+# Permutation Test
+N <- 10^4 - 1 # number of times to repeat this process
+result <- numeric(N) # space to save the random differences
+
+for (i in 1:N) {
+  index <- sample(n_total, size = n1, replace = FALSE)
+  result[i] <- mean(Time[index]) - mean(Time[-index])
+}
+
+# Plot histogram
+ggplot() + geom_histogram(aes(result), bins = 20) +
+geom_vline(xintercept = observed, linetype = "dashed")
+
+# P-value
+p_value = (sum(result >= observed) + 1)/(N + 1)
+p_value
+```
+Based on the p-value, we reject the null hypothesis. Flights departing in the evening and at night tends to get delayed longer than flights departing at earlier time.  
+######## Q2: Do flights departing in the Holidays Season (Winter & Summer) tends to get delayed longer than flights departing in other seasons?  
+H~0: $\mu$~H - $\mu$~O = 0  
+H~A: $\mu$~H - $\mu$~O $\ge$ 0  
+```{r}
+holiday = flights_weather$dep_delay[flights_weather$season == "winter" | flights_weather$season == "summer"]
+other = flights_weather$dep_delay[flights_weather$season == "spring" & flights_weather$season != "fall"]
+
+Time <- c(holiday, other)
+
+# Observed difference in means
+observed <- mean(holiday) - mean(other)
+observed
+
+# Get the sample sizes
+n1 <- length(holiday)
+n_total <- length(Time)
+
+# Permutation Test
+N <- 10^4 - 1 # number of times to repeat this process
+result <- numeric(N) # space to save the random differences
+
+for (i in 1:N) {
+  index <- sample(n_total, size = n1, replace = FALSE)
+  result[i] <- mean(Time[index]) - mean(Time[-index])
+}
+
+# Plot histogram
+ggplot() + geom_histogram(aes(result), bins = 20) +
+geom_vline(xintercept = observed, linetype = "dashed")
+
+# P-value
+p_value = (sum(result >= observed) + 1)/(N + 1)
+p_value
+```
+Based on the p-value, we reject the null hypothesis. Flights departing in the holidays season to get delayed slightly longer than flights departing in other seasons.  
+
+####### Departure delay vs Temperature
+```{r}
+ggplot(flights_weather, aes(x = temp, y = dep_delay)) +
+  geom_point(alpha = 0.3, size = 0.8) +
+  labs(
+    title = "Relationship between Temperature and Departure Delay",
+    x = "Temperature (°F)",
+    y = "Departure Delay (minutes)"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+```{r}
+flights_weather %>%
+  group_by(temp_q) %>%
+  summarize(mean_delay = mean(dep_delay, na.rm = TRUE),
+            median_delay = median(dep_delay, na.rm = TRUE),
+            n = n()) %>%
+  ggplot(aes(x = temp_q, y = mean_delay)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(mean_delay, 1)), vjust = -0.3, size = 3) +
+  labs(
+    title = "Average Departure Delay by Temperature (4 quantiles)",
+    x = "Temperature bin (°F)",
+    y = "Mean dep_delay (minutes)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+```{r}
+ggplot(flights_weather, aes(x = factor(temp_q), y = dep_delay)) +
+  geom_boxplot(outlier.size = 0.6, alpha = 0.7) +
+  labs(
+    title = "Departure Delay Distribution across Temperature Quartiles",
+    x = "Temperature quartile",
+    y = "Departure delay (minutes)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(legend.position = "none")
+```
+######## Q1: Do flights departing in warmer temperatures (4th quartile) tends to get delayed longer than flights departing in colder temperature (1st quartile)?  
+H~0: $\mu$~W - $\mu$~C = 0  
+H~A: $\mu$~W - $\mu$~C $\ge$ 0  
+
+```{r}
+cold = flights_weather$dep_delay[flights_weather$temp >= 10.9 & flights_weather$temp < 42.1]
+warm = flights_weather$dep_delay[flights_weather$temp >= 73 & flights_weather$temp <= 100]
+
+Time <- c(warm, cold)
+
+# Observed difference in means
+observed <- mean(warm) - mean(cold)
+observed
+
+# Get the sample sizes
+n1 <- length(warm)
+n_total <- length(Time)
+
+# Permutation Test
+N <- 10^4 - 1 # number of times to repeat this process
+result <- numeric(N) # space to save the random differences
+
+for (i in 1:N) {
+  index <- sample(n_total, size = n1, replace = FALSE)
+  result[i] <- mean(Time[index]) - mean(Time[-index])
+}
+
+# Plot histogram
+ggplot() + geom_histogram(aes(result), bins = 20) +
+geom_vline(xintercept = observed, linetype = "dashed")
+
+# P-value
+p_value = (sum(result >= observed) + 1)/(N + 1)
+p_value
+```
+####### Departure delay vs Wind Speed
+```{r}
+ggplot(flights_weather, aes(x = wind_speed, y = dep_delay)) +
+  geom_point(alpha = 0.3, size = 0.8) +
+  labs(
+    title = "Relationship between Wind Speed and Departure Delay",
+    x = "Wind Speed",
+    y = "Departure Delay (minutes)"
+  ) +
+  theme_minimal(base_size = 13)
+```
+
+```{r}
+flights_weather %>%
+  group_by(wind_speed_q) %>%
+  summarize(mean_delay = mean(dep_delay, na.rm = TRUE),
+            median_delay = median(dep_delay, na.rm = TRUE),
+            n = n()) %>%
+  ggplot(aes(x = wind_speed_q, y = mean_delay)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = round(mean_delay, 1)), vjust = -0.3, size = 3) +
+  labs(
+    title = "Average Departure Delay by Wind Speed (4 quantiles)",
+    x = "Wind Speed (mph)",
+    y = "Mean dep_delay (minutes)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+######## Q1: Do flights departing in stronger wind (4th quartile) tends to get delayed longer than flights departing in milder wind (1st quartile)?  
+H~0: $\mu$~F - $\mu$~S = 0  
+H~A: $\mu$~F - $\mu$~S $\ge$ 0  
+
+```{r}
+mild = flights_weather$dep_delay[flights_weather$wind_speed >= 0 & flights_weather$wind_speed < 6.9]
+strong = flights_weather$dep_delay[flights_weather$wind_speed >= 13.8 & flights_weather$wind_speed <= 42.6]
+
+Time <- c(strong, mild)
+
+# Observed difference in means
+observed <- mean(strong) - mean(mild)
+observed
+
+# Get the sample sizes
+n1 <- length(mild)
+n_total <- length(Time)
+
+# Permutation Test
+N <- 10^4 - 1 # number of times to repeat this process
+result <- numeric(N) # space to save the random differences
+
+for (i in 1:N) {
+  index <- sample(n_total, size = n1, replace = FALSE)
+  result[i] <- mean(Time[index]) - mean(Time[-index])
+}
+
+# Plot histogram
+ggplot() + geom_histogram(aes(result), bins = 20) +
+geom_vline(xintercept = observed, linetype = "dashed")
+
+# P-value
+p_value = (sum(result >= observed) + 1)/(N + 1)
+p_value
+```
+####### Departure delay vs Precipitation
+```{r}
+ggplot(flights_weather, aes(x = precip_binary, y = dep_delay, fill = precip_binary)) +
+  geom_boxplot(outlier.size = 0.7, alpha = 0.8) +
+  scale_fill_manual(values = c("skyblue3", "gray50"),
+                    labels = c("No precipitation", "Precipitation")) +
+  labs(
+    title = "Departure Delay by Precipitation Condition",
+    x = "Precipitation (0 = No, 1 = Yes)",
+    y = "Departure delay (minutes)",
+    fill = "Precipitation"
+  ) +
+  coord_cartesian(ylim = quantile(flights$dep_delay, c(0.01, 0.99), na.rm = TRUE)) +
+  theme_minimal(base_size = 13)
+```
+######## Q1: Do flights departing in precipitation tends to get delayed longer than flights departing in dry condition?  
+H~0: $\mu$~W - $\mu$~D = 0  
+H~A: $\mu$~W - $\mu$~D $\ge$ 0  
+
+```{r}
+wet = flights_weather$dep_delay[flights_weather$precip_binary == TRUE]
+dry = flights_weather$dep_delay[flights_weather$precip_binary == FALSE]
+
+Time <- c(wet, dry)
+
+# Observed difference in means
+observed <- mean(wet) - mean(dry)
+observed
+
+# Get the sample sizes
+n1 <- length(wet)
+n_total <- length(Time)
+
+# Permutation Test
+N <- 10^4 - 1 # number of times to repeat this process
+result <- numeric(N) # space to save the random differences
+
+for (i in 1:N) {
+  index <- sample(n_total, size = n1, replace = FALSE)
+  result[i] <- mean(Time[index]) - mean(Time[-index])
+}
+
+# Plot histogram
+ggplot() + geom_histogram(aes(result), bins = 20) +
+geom_vline(xintercept = observed, linetype = "dashed")
+
+# P-value
+p_value = (sum(result >= observed) + 1)/(N + 1)
+p_value
+```
+####### Departure delay vs Visibility
+```{r}
+ggplot(flights_weather, aes(x = visib, y = dep_delay)) +
+  geom_point(alpha = 0.3, color = "steelblue") +
+  labs(
+    title = "Departure Delay vs Visibility",
+    x = "Visibility (miles)",
+    y = "Departure Delay (minutes)"
+  ) +
+  theme_minimal()
+```
+
+
+```{r}
+ggplot(flights_weather, aes(x = visib_cat, y = dep_delay, fill = visib_cat)) +
+  geom_boxplot(outlier.alpha = 0.3) +
+  labs(
+    title = "Departure Delay by Visibility Category",
+    x = "Visibility Category",
+    y = "Departure Delay (minutes)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+######## Q1: Do flights departing in poor visibilty tend to get delayed longer than flights departing in good visibility?  
+H~0: $\mu$~P - $\mu$~G = 0  
+H~A: $\mu$~P - $\mu$~G $\ge$ 0  
+
+```{r}
+poor = flights_weather$dep_delay[flights_weather$visib_cat == 'poor']
+good = flights_weather$dep_delay[flights_weather$visib_cat == 'good']
+
+Time <- c(poor, good)
+
+# Observed difference in means
+observed <- mean(poor) - mean(good)
+observed
+
+# Get the sample sizes
+n1 <- length(poor)
+n_total <- length(Time)
+
+# Permutation Test
+N <- 10^4 - 1 # number of times to repeat this process
+result <- numeric(N) # space to save the random differences
+
+for (i in 1:N) {
+  index <- sample(n_total, size = n1, replace = FALSE)
+  result[i] <- mean(Time[index]) - mean(Time[-index])
+}
+
+# Plot histogram
+ggplot() + geom_histogram(aes(result), bins = 20) +
+geom_vline(xintercept = observed, linetype = "dashed")
+
+# P-value
+p_value = (sum(result >= observed) + 1)/(N + 1)
+p_value
+```
+
+```{r fig-late-by-precip, message=FALSE, warning=FALSE, fig.cap="Proportion of Late Flights by Precipitation Condition"}
+# Calculate the proportion of late flights under precipitation vs no precipitation
+late_by_precip <- flights_weather %>%
+  group_by(precip_binary) %>%
+  summarise(late_rate = mean(late, na.rm = TRUE), .groups = "drop")
+
+# Define consistent colors with boxplot
+precip_colors <- c("FALSE" = "#9ecae1",  # same light blue used throughout
+                   "TRUE"  = "#969696")  # same gray used throughout
+
+# Bar plot showing the share of late departures by precipitation
+ggplot(late_by_precip, aes(x = precip_binary, y = late_rate, fill = precip_binary)) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_manual(values = precip_colors) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "Proportion of Late Departures by Precipitation",
+    x = "Precipitation (No / Yes)",
+    y = "Late Flights (%)"
+  ) +
+  theme_minimal(base_size = 13)
+late_by_precip
+```
+
+Each bar shows the percentage of flights that departed late within that weather condition.
+The two bars represent conditional probabilities (“chance of a late flight given the condition”), not shares of all flights.
+This matches the permutation test that compares the difference in late-flight proportions between the two weather conditions.
+---
+
+
+```{r fig-late-by-visib, message=FALSE, warning=FALSE, fig.cap="Proportion of Late Flights by Visibility Category"}
+# Calculate the proportion of late flights by visibility category
+late_by_visib <- flights_weather %>%
+  group_by(visib_cat) %>%
+  summarise(late_rate = mean(late, na.rm = TRUE), .groups = "drop")
+
+# Bar plot showing the share of late departures by visibility
+ggplot(late_by_visib, aes(x = visib_cat, y = late_rate, fill = visib_cat)) +
+  geom_col(show.legend = FALSE) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(
+    title = "Proportion of Late Departures by Visibility",
+    x = "Visibility Category",
+    y = "Late Flights (%)"
+  ) +
+  theme_minimal(base_size = 13)
+late_by_visib
+```
+The bars represent the fraction of flights that left late within each visibility category.
+Each bar answers a separate question:
+Out of all flights that day with this visibility, what share were late?
+
+The result shows that low-visibility periods have a higher late-departure rate, consistent with the permutation test for differences in proportions.
+
+
+```{r fig-summary-chart-robust, message=FALSE, warning=FALSE, fig.cap="Proportion of Late Flights by Key Factors (Actual Data — robust mapping)"}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(stringr)
+
+# 1) Pick dataset safely
+df <- if (exists("flights_weather")) flights_weather else if (exists("flights")) flights else stop("No flights dataset found.")
+
+# 2) Ensure 'late' exists (project uses > 0 minutes as 'late')
+if (!"late" %in% names(df)) {
+  if (!"dep_delay" %in% names(df)) stop("dep_delay missing; cannot compute `late`.")
+  df <- df %>% mutate(late = dep_delay > 0)
+}
+
+# 3) Standardize categories flexibly (handles many label variants)
+df_std <- df %>%
+  mutate(
+    # Time of day (collapse any early bucket to "Early Morning"; any evening/night bucket to "Evening/Night")
+    time_of_day_std = case_when(
+      !is.null(time_of_day) & str_detect(time_of_day, regex("early", TRUE)) ~ "Early Morning",
+      !is.null(time_of_day) & str_detect(time_of_day, regex("night|evening", TRUE)) ~ "Evening/Night",
+      TRUE ~ NA_character_
+    ),
+    # Season (keep only Winter/Summer for the summary bars)
+    season_std = case_when(
+      !is.null(season) & str_detect(season, regex("^win", TRUE)) ~ "Winter",
+      !is.null(season) & str_detect(season, regex("^sum", TRUE)) ~ "Summer",
+      TRUE ~ NA_character_
+    ),
+    # Precipitation (prefer existing bin; else derive from numeric precip if present)
+    precip_bin_std = case_when(
+      "precip_bin" %in% names(df) & str_detect(precip_binary, regex("no", TRUE)) ~ "No Precipitation",
+      "precip_bin" %in% names(df) & str_detect(precip_binary, regex("precip", TRUE)) ~ "Precipitation",
+      !"precip_bin" %in% names(df) & "precip" %in% names(df) & !is.na(precip) & precip > 0 ~ "Precipitation",
+      !"precip_bin" %in% names(df) & "precip" %in% names(df) & !is.na(precip) & precip <= 0 ~ "No Precipitation",
+      TRUE ~ NA_character_
+    ),
+    # Visibility (prefer existing bin; else derive from numeric visib)
+    visib_bin_std = case_when(
+      "visib_bin" %in% names(df) & str_detect(visib_cat, regex("good|normal", TRUE)) ~ "Good Visibility",
+      "visib_bin" %in% names(df) & str_detect(visib_cat, regex("poor|low", TRUE)) ~ "Poor Visibility",
+      !"visib_bin" %in% names(df) & "visib" %in% names(df) & !is.na(visib) & visib >= 5 ~ "Good Visibility",
+      !"visib_bin" %in% names(df) & "visib" %in% names(df) & !is.na(visib) & visib < 5  ~ "Poor Visibility",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Helper to compute late-rate (%) for a single label within a standardized column
+late_rate_of <- function(data, col, value_label) {
+  v <- data %>% filter(!is.na(.data[[col]])) %>% transmute(l = late, g = .data[[col]])
+  if (nrow(v) == 0 || sum(v$g == value_label, na.rm = TRUE) == 0) return(NA_real_)
+  mean(v$l[v$g == value_label], na.rm = TRUE) * 100
+}
+
+# 4) Compute the 8 bars (using standardized labels)
+summary_actual <- tibble::tibble(
+  Factor = c("Early Morning","Evening/Night","Winter","Summer","No Precipitation","Precipitation","Good Visibility","Poor Visibility"),
+  LateRate = c(
+    late_rate_of(df_std, "time_of_day_std", "Early Morning"),
+    late_rate_of(df_std, "time_of_day_std", "Evening/Night"),
+    late_rate_of(df_std, "season_std", "Winter"),
+    late_rate_of(df_std, "season_std", "Summer"),
+    late_rate_of(df_std, "precip_bin_std", "No Precipitation"),
+    late_rate_of(df_std, "precip_bin_std", "Precipitation"),
+    late_rate_of(df_std, "visib_bin_std", "Good Visibility"),
+    late_rate_of(df_std, "visib_bin_std", "Poor Visibility")
+  )
+) %>%
+  filter(!is.na(LateRate))
+
+# 5) Plot
+ggplot(summary_actual, aes(x = reorder(Factor, LateRate), y = LateRate)) +
+  geom_col(fill = "#2b6cb0") +
+  coord_flip() +
+  labs(
+    title = "Proportion of Late Flights by Key Factors (UA, NYC 2013)",
+    x = NULL, y = "Late Flights (%)"
+  ) +
+  theme_minimal(base_size = 12) +
+  scale_y_continuous(expand = expansion(mult = c(0, .05)))
+```
+
+#### Distribution of departure delays
+
+Most flights cluster around 0, but the tail (long delays) drives the averages.
+
+Purpose: Visualize the general pattern of departure delays for United flights.
+What it shows: Most flights cluster around 0 (on-time or slightly late),
+but there’s a long right tail representing extreme delays.
+Relation to project: Demonstrates that delay data are highly skewed,
+motivating the use of nonparametric methods (resampling, permutation tests).
+
+```{r}
+ggplot(flights_weather, aes(x = dep_delay)) +
+  geom_histogram(binwidth = 5, fill = "#2b6cb0", color = "white") +
+  xlim(-20, 180) +
+  labs(
+    title = "Distribution of Departure Delays for United Flights (2013)",
+    x = "Departure Delay (minutes)",
+    y = "Number of Flights"
+  ) +
+  theme_minimal()
+```
+
+#### Seasonal Patterns by Month (Not Just Seasons)
+
+This plot shows the shape of variation across months (e.g., July and August spikes, holiday dips).
+It's of interest to see June, July, and December months and the delays then. 
+
+Purpose: Show how departure delays vary by individual month.
+What it shows: Summer months (June–August) tend to have higher median delays,
+while winter months show more variability due to snow events.
+Relation to project: Refines the “season” grouping and reveals finer trends
+that could otherwise be hidden in broader seasonal categories.
+
+```{r}
+ggplot(flights_weather, aes(x = factor(month), y = dep_delay)) +
+  geom_boxplot(fill = "#5a9bd4") +
+  labs(
+    title = "Monthly Distribution of Departure Delays (United Airlines)",
+    x = "Month",
+    y = "Departure Delay (minutes)"
+  ) +
+  theme_minimal()
+
+```
+
+#### Correlation (Informal) Between Weather Variables and Delays
+
+Purpose: Visually check for possible relationships between temperature and delays.
+What it shows: A mild upward trend at extreme temperatures,
+but high scatter overall — indicating weak correlation.
+Relation to project: This motivates later permutation tests that confirm
+temperature has a statistically detectable but practically small effect.
+
+```{r}
+ggplot(flights_weather, aes(x = temp, y = dep_delay)) +
+  geom_point(alpha = 0.2, color = "#2b6cb0") +
+  geom_smooth(se = FALSE, color = "red") +
+  labs(
+    title = "Departure Delays vs. Temperature",
+    x = "Temperature (°F)",
+    y = "Departure Delay (minutes)"
+  ) +
+  theme_minimal()
+
+```
+
+#### Airport Comparison (EWR vs JFK vs LGA)
+
+This seemed interesting. Perhaps there is a correlation between weather and the airports, 
+and how operations handles weather events even though they are in the same area. 
+Also, there is some discussion that should be had with operations between the various 
+airports to learn from each other.
+
+Purpose: Compare average late-flight rates across NYC airports for United.
+What it shows: Operational differences between airports (e.g., EWR busiest
+and often most delay-prone). LGA and JFK tend to show smaller delay rates.
+Relation to project: This is not not part of hypothesis testing,
+but helps interpret operational variation in the NYC area.
+
+```{r}
+flights_weather %>%
+  group_by(origin) %>%
+  summarise(late_rate = mean(late, na.rm = TRUE)) %>%
+  ggplot(aes(x = origin, y = late_rate, fill = origin)) +
+  geom_col(show.legend = FALSE) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(
+    title = "Proportion of Late Flights by NYC Airport (United)",
+    x = "Airport",
+    y = "Late Flights (%)"
+  ) +
+  theme_minimal()
+
+```
+

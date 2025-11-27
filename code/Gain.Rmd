@@ -1,0 +1,443 @@
+---
+title: "United Airlines Gains"
+authors: Dan Nguyen, Jennifer Poling, Paul Skentzos
+output: html_document
+date: "2025-10-25"
+---
+# United Airlines Gains Project
+
+###### Install libraries
+```{r}
+library(tidyverse)
+library(nycflights13)
+```
+
+## Prepare the Data
+
+###### Inspect the data
+```{r}
+glimpse(flights)
+```
+
+
+###### Keep only the relevant United Airlines flights 
+
+```{r}
+flights_UA <- flights %>%
+  filter(carrier == 'UA') %>%
+  filter(!is.na(dep_delay)) %>%
+  filter(!is.na(arr_delay)) %>%
+  filter(!is.na(air_time))
+```
+
+
+###### Create the "late" and "very_late" columns
+```{r}
+flights_UA <- flights_UA %>%
+  mutate(
+    late = dep_delay > 0,
+    very_late = dep_delay > 30
+    )
+glimpse(flights_UA)
+```
+
+###### Create gain column (how much quicker the flight ended up being than planned)
+```{r}
+flights_UA <- flights_UA %>%
+  mutate(
+    gain = dep_delay - arr_delay
+    )
+glimpse(flights_UA)
+```
+
+## Analysis
+
+#### Does the average gain differ for flights that departed late versus those that did not? 
+
+###### Summary Statistics
+```{r}
+summ_late <- flights_UA %>%
+  group_by(late) %>%
+  summarize(mean = mean(gain),
+            std_dev = sd(gain),
+            min = min(gain),
+            q25 = quantile(gain, 0.25),
+            median = median(gain),
+            q75 = quantile(gain, 0.75),
+            max = max(gain))
+
+summ_late
+```
+
+###### Histogram
+```{r}
+ggplot(data = flights_UA, mapping = aes(x = gain, fill = late))+
+  geom_histogram(position = 'identity', alpha = 0.5, binwidth = 5)+
+  scale_fill_manual(values = c("FALSE" = 'darkgreen', 'TRUE' = 'purple'))+
+  labs(title = 'Distribution of Gain by Whether Late')
+```
+
+###### Boxplot
+```{r}
+ggplot(data = flights_UA, mapping = aes(x = late, y = gain, fill = late))+
+  geom_boxplot()+
+  scale_fill_manual(values = c("FALSE" = 'darkgreen', 'TRUE' = 'purple'))+
+  labs(title = 'Boxplot of Gain by Whether Late')  
+```
+
+Based on the summary table and graphs, it doesn't look like there's a big difference in gain between flights that are late and flights that are not late. Based on the histogram, it looks like flights that are not late have a larger gain near the center of the distribution, while flights that are late have a larger gain on the tails of the distribution. However, the difference is greater near the mean than on the tails.
+
+###### Hypothesis Test
+
+H0: mu1 - mu2 = 0
+Ha: mu1 - mu2 != 0
+```{r}
+t.test(gain ~ late, data = flights_UA, alternative = 'two.sided')
+```
+
+The p-value is very small, so we reject the null hypothesis. The average gain does differ for flights that departed late versus those that did not.
+
+#### Does the average gain differ for flights that departed more than 30 minutes late versus those that did not? 
+
+###### Summary Statistics
+```{r}
+summ_vlate <- flights_UA %>%
+  group_by(very_late) %>%
+  summarize(mean = mean(gain),
+            std_dev = sd(gain),
+            min = min(gain),
+            q25 = quantile(gain, 0.25),
+            median = median(gain),
+            q75 = quantile(gain, 0.75),
+            max = max(gain))
+
+summ_vlate
+```
+
+###### Histogram
+```{r}
+ggplot(data = flights_UA, mapping = aes(x = gain, fill = very_late))+
+  geom_histogram(position = 'identity', alpha = 0.5, binwidth = 5)+
+  scale_fill_manual(values = c("FALSE" = 'darkgreen', 'TRUE' = 'purple'))+
+  labs(title = 'Distribution of Gain by Whether Very Late')
+```
+
+###### Boxplot
+```{r}
+ggplot(data = flights_UA, mapping = aes(x = very_late, y = gain, fill = very_late))+
+  geom_boxplot()+
+  scale_fill_manual(values = c("FALSE" = 'darkgreen', 'TRUE' = 'purple'))+
+  labs(title = 'Boxplot of Gain by Whether Very Late')  
+```
+
+Based on the summary table and boxplot, it doesn't look like there's a big difference in gain between flights that are very late and flights that are not. It also looks like the spread is larger for flights that are very late. Based on the histogram, it looks like flights that are not very late have a larger gain.
+
+###### Hypothesis Test
+
+H0: mu1 - mu2 = 0
+Ha: mu1 - mu2 != 0
+```{r}
+t.test(gain ~ very_late, data = flights_UA, alternative = 'two.sided')
+```
+
+The p-value is very small, so we reject the null hypothesis. The average gain does differ for flights that departed very late versus those that did not.
+
+#### What are the five most common destination airports for United Airlines flights from New York City?
+```{r}
+flights_NYC <- flights_UA %>%
+  filter(origin == 'JFK' | origin == 'LGA')
+```
+
+```{r}
+ggplot(data = flights_NYC, mapping = aes(x = dest, fill = dest))+
+  geom_bar()+
+  labs(title = 'United Destinations From NYC')
+```
+
+The five most common destination airports for United Airlines flights from New York City are ORD, IAH, SFO, LAX, and DEN.
+
+#### Describe the distribution and the average gain for each of these five airports.
+
+###### ORD
+```{r}
+flights2ORD <- flights_NYC %>%
+  filter(dest == 'ORD')
+```
+
+```{r}
+summ_ORD <- flights2ORD %>%
+  summarize(mean = mean(gain),
+            std_dev = sd(gain),
+)
+
+summ_ORD
+```
+
+```{r}
+ggplot(data = flights2ORD, mapping = aes(x = gain))+
+  geom_histogram(color = 'white', binwidth = 5, fill = 'blue')+
+  labs(title = 'Distribution of Gain from NYC to ORD')
+```
+
+The average gain for flights from NYC to ORD is 7.39 minutes. The distribution is fairly normal in the center and left tailed, meaning that there are flights with a much more negative gain and there are not flights with an equivalent positive gain.
+
+###### IAH
+```{r}
+flights2IAH <- flights_NYC %>%
+  filter(dest == 'IAH')
+```
+
+```{r}
+summ_IAH <- flights2IAH %>%
+  summarize(mean = mean(gain),
+            std_dev = sd(gain),
+)
+
+summ_IAH
+```
+
+```{r}
+ggplot(data = flights2IAH, mapping = aes(x = gain))+
+  geom_histogram(color = 'white', binwidth = 5, fill = 'green')+
+  labs(title = 'Distribution of Gain from NYC to IAH')
+```
+
+The average gain for flights from NYC to IAH is 7.62 minutes. The distribution is fairly normal. There do appear to be some flights with a much more negative gain and there are not flights with an equivalent positive gain.
+
+###### SFO
+```{r}
+flights2SFO <- flights_NYC %>%
+  filter(dest == 'SFO')
+```
+
+```{r}
+summ_SFO <- flights2SFO %>%
+  summarize(mean = mean(gain),
+            std_dev = sd(gain),
+)
+
+summ_SFO
+```
+
+```{r}
+ggplot(data = flights2SFO, mapping = aes(x = gain))+
+  geom_histogram(color = 'white', binwidth = 5, fill = 'purple')+
+  labs(title = 'Distribution of Gain from NYC to SFO')
+```
+
+The average gain for flights from NYC to SFO is 4.68 minutes. The distribution is fairly normal in the center and left tailed, meaning that there are flights with a much more negative gain and there are not flights with an equivalent positive gain.
+
+###### LAX
+```{r}
+flights2LAX <- flights_NYC %>%
+  filter(dest == 'LAX')
+```
+
+```{r}
+summ_LAX <- flights2LAX %>%
+  summarize(mean = mean(gain),
+            std_dev = sd(gain),
+)
+
+summ_LAX
+```
+
+```{r}
+ggplot(data = flights2LAX, mapping = aes(x = gain))+
+  geom_histogram(color = 'white', binwidth = 5, fill = 'lightblue')+
+  labs(title = 'Distribution of Gain from NYC to LAX')
+```
+
+The average gain for flights from NYC to LAX is 6.04 minutes. The distribution is fairly normal.
+
+###### DEN
+```{r}
+flights2DEN <- flights_NYC %>%
+  filter(dest == 'DEN')
+```
+
+```{r}
+summ_DEN <- flights2DEN %>%
+  summarize(mean = mean(gain),
+            std_dev = sd(gain),
+)
+
+summ_DEN
+```
+
+```{r}
+ggplot(data = flights2DEN, mapping = aes(x = gain))+
+  geom_histogram(color = 'white', binwidth = 5, fill = 'gold')+
+  labs(title = 'Distribution of Gain from NYC to DEN')
+```
+
+The average gain for flights from NYC to SFO is 6.39 minutes. The distribution is fairly normal in the center and left tailed, meaning that there are flights with a much more negative gain and there are not flights with an equivalent positive gain.
+
+#### Calculate the gain per hour by dividing the total gain by the duration in hours of each flight.
+```{r}
+flights_UA <- flights_UA %>%
+  mutate(
+    gain_hr = gain / air_time
+    )
+glimpse(flights_UA)
+```
+
+#### Does the average gain per hour differ for flights that departed late versus those that did not?
+
+###### Summary Statistics
+```{r}
+summ_late_hr <- flights_UA %>%
+  group_by(late) %>%
+  summarize(mean = mean(gain_hr),
+            std_dev = sd(gain_hr),
+            min = min(gain_hr),
+            q25 = quantile(gain_hr, 0.25),
+            median = median(gain_hr),
+            q75 = quantile(gain_hr, 0.75),
+            max = max(gain_hr))
+
+summ_late_hr
+```
+
+###### Histogram
+```{r}
+ggplot(data = flights_UA, mapping = aes(x = gain_hr, fill = late))+
+  geom_histogram(position = 'identity', alpha = 0.5, binwidth = 0.1)+
+  scale_fill_manual(values = c("FALSE" = 'darkgreen', 'TRUE' = 'purple'))+
+  labs(title = 'Distribution of Gain/Hour by Whether Late')
+```
+
+###### Boxplot
+```{r}
+ggplot(data = flights_UA, mapping = aes(x = late, y = gain_hr, fill = late))+
+  geom_boxplot()+
+  scale_fill_manual(values = c("FALSE" = 'darkgreen', 'TRUE' = 'purple'))+
+  labs(title = 'Boxplot of Gain/Hour by Whether Late')  
+```
+
+Based on the summary table and graphs, it doesn't look like there's a big difference in gain per hour between flights that are late and flights that are not late. Based on the histogram, it looks like there are more flights that are not late with positive gains per hour, while there are more flights that are late with negative gains per hour.
+
+###### Hypothesis Test
+
+H0: mu1 - mu2 = 0
+Ha: mu1 - mu2 != 0
+```{r}
+t.test(gain_hr ~ late, data = flights_UA, alternative = 'two.sided')
+```
+
+The p-value is very small, so we reject the null hypothesis. The average gain per hour does differ for flights that departed late versus those that did not.
+
+#### Does the average gain per hour differ for flights that departed more than 30 minutes late versus those that did not?
+
+```{r}
+summ_vlate_hr <- flights_UA %>%
+  group_by(very_late) %>%
+  summarize(mean = mean(gain_hr),
+            std_dev = sd(gain_hr),
+            min = min(gain_hr),
+            q25 = quantile(gain_hr, 0.25),
+            median = median(gain_hr),
+            q75 = quantile(gain_hr, 0.75),
+            max = max(gain_hr))
+
+summ_vlate_hr
+```
+
+###### Histogram
+```{r}
+ggplot(data = flights_UA, mapping = aes(x = gain_hr, fill = very_late))+
+  geom_histogram(position = 'identity', alpha = 0.5, binwidth = 0.1)+
+  scale_fill_manual(values = c("FALSE" = 'darkgreen', 'TRUE' = 'purple'))+
+  labs(title = 'Distribution of Gain/Hour by Whether Very Late')
+```
+
+###### Boxplot
+```{r}
+ggplot(data = flights_UA, mapping = aes(x = late, y = gain_hr, fill = late))+
+  geom_boxplot()+
+  scale_fill_manual(values = c("FALSE" = 'darkgreen', 'TRUE' = 'purple'))+
+  labs(title = 'Boxplot of Gain/Hour by Whether Late')  
+```
+
+Based on the summary table and boxplot, it doesn't look like there's a big difference in gain between flights that are very late and flights that are not. Based on the histogram, it looks like flights that are not very late have a larger gain.
+
+###### Hypothesis Test
+
+H0: mu1 - mu2 = 0
+Ha: mu1 - mu2 != 0
+```{r}
+t.test(gain_hr ~ very_late, data = flights_UA, alternative = 'two.sided')
+```
+
+The p-value is very small, so we reject the null hypothesis. The average gain per hour does differ for flights that departed very late versus those that did not.
+
+#### Does the average gain per hour differ for longer flights versus shorter flights?
+
+###### Summary Statistics
+Determine what are longer flights and what are shorter flights.
+```{r}
+summ_time <- flights_UA %>%
+  summarize(mean = mean(air_time),
+            std_dev = sd(air_time),
+            min = min(air_time),
+            q25 = quantile(air_time, 0.25),
+            median = median(air_time),
+            q75 = quantile(air_time, 0.75),
+            max = max(air_time))
+
+summ_time
+```
+
+I will choose a round number between the mean and the median and make flights that are 200 minutes or less short and flights that are over 200 minutes long.
+
+###### Create the "short" column.
+```{r}
+flights_UA <- flights_UA %>%
+  mutate(
+    short = air_time <= 200
+    )
+glimpse(flights_UA)
+```
+
+###### Summary Statistics
+```{r}
+summ_short <- flights_UA %>%
+  group_by(short) %>%
+  summarize(mean = mean(gain_hr),
+            std_dev = sd(gain_hr),
+            min = min(gain_hr),
+            q25 = quantile(gain_hr, 0.25),
+            median = median(gain_hr),
+            q75 = quantile(gain_hr, 0.75),
+            max = max(gain_hr))
+
+summ_short
+```
+
+###### Histogram
+```{r}
+ggplot(data = flights_UA, mapping = aes(x = gain_hr, fill = short))+
+  geom_histogram(position = 'identity', alpha = 0.5, binwidth = 0.05)+
+  scale_fill_manual(values = c("FALSE" = 'darkgreen', 'TRUE' = 'purple'))+
+  labs(title = 'Distribution of Gain/Hour by Short vs Long Flight')
+```
+
+###### Boxplot
+```{r}
+ggplot(data = flights_UA, mapping = aes(x = late, y = gain_hr, fill = late))+
+  geom_boxplot()+
+  scale_fill_manual(values = c("FALSE" = 'darkgreen', 'TRUE' = 'purple'))+
+  labs(title = 'Boxplot of Gain/Hour by Whether Late')  
+```
+
+Based on the summary table and boxplot, it doesn't look like there's a big difference in gain between flights that are very late and flights that are not. Based on the histogram, it looks like more short flights have a gain per hour around zero, and more long flights have larger and smaller gains per hour.
+
+###### Hypothesis Test
+
+H0: mu1 - mu2 = 0
+Ha: mu1 - mu2 != 0
+```{r}
+t.test(gain_hr ~ short, data = flights_UA, alternative = 'two.sided')
+```
+
+The p-value is very small, so we reject the null hypothesis. The average gain per hour does differ for longer flights versus shorter flights.
