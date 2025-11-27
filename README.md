@@ -17,7 +17,7 @@
 
 ## Authors
 
-- Your Name - Jennifer Poling, Dan Nguyen, Paul Skentzos
+- Jennifer Poling, Dan Nguyen, Paul Skentzos
 
 ---
 
